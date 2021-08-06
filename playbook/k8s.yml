@@ -1,0 +1,13 @@
+---
+- hosts: masters
+  become: true
+  roles:
+    - containerd
+    - kube-base
+    - control-plane
+- hosts: workers
+  become: true
+  roles:
+    - containerd
+    - kube-base
+    - worker

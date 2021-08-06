@@ -1,0 +1,147 @@
+- name: Update the /etc/hosts file with node name
+  become: yes
+  lineinfile:
+    path: "/etc/hosts"
+    regexp: "{{ hostvars[item]['node_ip'] }}\t{{ hostvars[item]['node_name']}}\t{{ hostvars[item]['node_name']}}.{{ k8s_domain }}"
+    line: "{{ hostvars[item]['node_ip'] }}\t{{ hostvars[item]['node_name']}}\t{{ hostvars[item]['node_name']}}.{{ k8s_domain }}"
+    state: present
+    backup: yes
+  register: edit_host
+  when: ansible_hostname != item  or ansible_hostname ==  item
+  with_items: "{{groups['all']}}"
+
+- name: Install packages that allow apt to be used over HTTPS
+  apt:
+    name: "{{ packages }}"
+    state: present
+    update_cache: yes
+    force_apt_get: yes
+  vars:
+    packages:
+    - apt-transport-https
+    - ca-certificates
+    - curl
+    - gnupg-agent
+    - software-properties-common
+
+- name: Install pip
+  apt:
+    name: python3-pip
+    state: present
+    update_cache: no
+    force_apt_get: yes
+
+- name: Remove swapfile from /etc/fstab
+  mount:
+    name: "{{ item }}"
+    fstype: swap
+    state: absent
+  with_items:
+    - swap
+    - none
+
+- name: Disable swap
+  command: swapoff -a
+  when: ansible_swaptotal_mb > 0
+
+- name: Enable kernel modules runtime
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+  - br_netfilter
+  - overlay
+  - rbd
+
+- name: Enable kernel modules on boot
+  ansible.builtin.copy:
+    mode: 0644
+    content: "{{ item }}"
+    dest: "/etc/modules-load.d/{{ item }}.conf"
+  loop:
+  - br_netfilter
+  - overlay
+  - rbd
+
+- name: Set hostname to inventory hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  when:
+  - ansible_hostname != inventory_hostname
+
+- name: Check for bridge-nf-call-iptables
+  ansible.builtin.stat:
+    path: /proc/sys/net/bridge/bridge-nf-call-iptables
+  register: bridge_nf_call_iptables_result
+
+- name: Set Kubernetes network configuration
+  ansible.builtin.blockinfile:
+    path: /etc/sysctl.d/99-kubernetes-cri.conf
+    mode: 0644
+    create: true
+    block: |
+      net.ipv4.ip_forward = 1
+      net.bridge.bridge-nf-call-iptables = 1
+  when:
+  - bridge_nf_call_iptables_result.stat.exists
+  register: sysctl_network
+
+- name: Reload Kubernetes network configuration
+  ansible.builtin.shell: sysctl -p /etc/sysctl.d/99-kubernetes-cri.conf
+  when:
+  - sysctl_network.changed
+  - bridge_nf_call_iptables_result.stat.exists
+
+- name: Install openvswitch packages but do not start services
+  apt:
+    name: openvswitch-switch
+    state: present
+    force_apt_get: yes
+  notify:
+    - stop ovs-vswitchd
+    - stop ovsdb-server
+    - stop openvswitch-switch
+  environment:
+    RUNLEVEL: 1
+
+- name: Add an apt signing key for Kubernetes
+  apt_key:
+    url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+    state: present
+
+- name: Adding apt repository for Kubernetes
+  apt_repository:
+    # kubernetes-xenial should work for Ubuntu 16.04+, there is no
+    # kubernetes-bionic
+    repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+    state: present
+    filename: kubernetes.list
+
+- name: Install Kubernetes binaries
+  apt:
+    name: "{{ packages }}"
+    state: present
+    update_cache: yes
+    force_apt_get: yes
+  vars:
+    packages:
+    - kubelet
+    - kubeadm
+    - kubectl
+  notify:
+    - kubelet status
+
+- name: Configure node ip
+  lineinfile:
+    path: /etc/default/kubelet
+    line: KUBELET_EXTRA_ARGS=--node-ip={{ node_ip }}
+    state: present
+    create: yes
+  register: kubelet_config
+
+- name: Restart kubelet
+  service:
+    name: kubelet
+    daemon_reload: yes
+    state: restarted
+  when: kubelet_config.changed

@@ -1,0 +1,23 @@
+extraCertSANs: master.kube.com
+k8s_domain: kube.com
+
+k8s_api_server_ip: 192.168.77.100
+k8s_pod_network_cidr: 172.16.0.0/16
+
+kubeadm_version: 1.21.1-00
+kubelet_version: 1.21.1-00
+kubectl_version: 1.21.1-00
+
+containerd_registry_mirrors:
+  - name: registry.pellep.io:5000
+    endpoint:
+      - https://registry.pellep.io:5000
+containerd_registry_configs:
+  - name: registry.pellep.io:5000
+    tls:
+      insecure_skip_verify: true
+    auth:
+      username: registry
+      password: secret
+      auth: "{{ ('registry:secret') | b64encode }}"
+      identitytoken: "token"
