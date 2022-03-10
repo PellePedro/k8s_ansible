@@ -1,0 +1,18 @@
+# Commands
+
+## Deploy Antrea CNI
+```
+kubectl apply -f https://raw.githubusercontent.com/antrea-io/antrea/main/build/yamls/antrea.yml
+```
+
+## Gather Facts
+```
+ansible all -m gather_facts --tree ./facts
+```
+
+## Ping Nodes
+```
+ansible all -m ping
+```
+
+
